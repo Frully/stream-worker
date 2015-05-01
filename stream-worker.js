@@ -24,11 +24,11 @@ module.exports = function(stream, concurrency, worker, cb) {
   function finishTask (err) {
     running -= 1;
     errorHandler(err);
+    stream.resume();
     if (tasks.length) {
       startNextTask();
     } else {
       completeIfDone();
-      stream.resume();
     }
   }
 

@@ -38,7 +38,7 @@ describe 'stream-worker', ->
       beforeEach ->
         sinon.spy stream, 'resume'
         workers[0].done() # works on the extra data that caused us to pause the stream
-        workers[1].done() # free to work on something new
+#        workers[1].done() # free to work on something new
 
       it 'resumes the stream', ->
         expect(stream.resume).was.called()
