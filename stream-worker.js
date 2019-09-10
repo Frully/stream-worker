@@ -1,63 +1,95 @@
-module.exports = function(stream, concurrency, worker, cb) {
+var Promise = require('bluebird');
 
+
+/**
+ *
+ * @param {Stream} stream
+ * @param {Function} worker - work to be done on each data element of the stream
+ * @param {Object} options
+ * @param {Boolean} [options.promises=false] - if true, the worker operates using promises.
+ * @param {Number} [options.concurrency=10] - the maximum number of tasks to run concurrently
+ * @param {Function} [done] - if using callbacks, this is called when work on the stream finishes
+ */
+module.exports = function (stream, worker, options, done) {
   var tasks = [],
-      running = 0,
-      closed = false,
-      firstError = null;
+    running = 0,
+    closed = false,
+    firstError = null;
 
-  function errorHandler (err) {
-    if (err != null) {
-      if (firstError == null) {
-        firstError = err;
+  var promises = options.promises ? options.promises : false;
+  var concurrency = options.concurrency ? options.concurrency : 10;
+  if (promises === false) {
+    worker = Promise.promisify(worker);
+  }
+
+  return Promise.try(function () {
+
+    var resolve, reject;
+    var streamPromise = new Promise(function (__resolve, __reject) {
+      resolve = __resolve;
+      reject = __reject;
+    });
+
+    function errorHandler(err) {
+      if (err != null) {
+        if (firstError == null) {
+          firstError = err;
+        }
       }
     }
-  }
 
-  function completeIfDone () {
-    if (closed && tasks.length === 0 && running <= 0) {
-      if (typeof cb === "function") {
-        cb(firstError);
+    function closeHandler () {
+      closed = true;
+      completeIfDone();
+    }
+
+    function finishTask(err) {
+      running -= 1;
+      errorHandler(err);
+      stream.resume();
+      if (tasks.length) {
+        startNextTask();
+      } else {
+        completeIfDone();
       }
     }
-  }
 
-  function finishTask (err) {
-    running -= 1;
-    errorHandler(err);
-    stream.resume();
-    if (tasks.length) {
-      startNextTask();
-    } else {
-      completeIfDone();
+    function startNextTask() {
+      var data = tasks.shift();
+      if (data == null) {
+        completeIfDone();
+      }
+      running += 1;
+      Promise.try(function () { return worker(data); })
+        .then(function (finishedWith) {
+          finishTask();
+          return null;
+        }, function (err) {
+          finishTask(err);
+          return null;
+        });
     }
-  }
 
-  function startNextTask () {
-    var data = tasks.shift();
-    if (data == null) {
-      completeIfDone();
+    function completeIfDone() {
+      if (!closed || tasks.length > 0 || running > 0) return;
+      if (firstError) return reject(firstError);
+      return resolve();
     }
-    running += 1;
-    try {
-      worker(data, finishTask);
-    } catch (e) {
-      finishTask(e);
-    }
-  }
 
-  stream.on('data', function(data) {
-    tasks.push(data);
-    if (running < concurrency) {
-      startNextTask();
-    } else {
-      stream.pause();
-    }
-  });
+    stream.on('data', function (data) {
+      tasks.push(data);
+      if (running < concurrency) {
+        startNextTask();
+      } else {
+        stream.pause();
+      }
+    });
 
-  stream.on('error', errorHandler);
+    stream.on('error', errorHandler);
+    stream.on('close', closeHandler);
+    stream.on('end', closeHandler);
 
-  stream.on('end', function() {
-    closed = true;
-    completeIfDone();
-  });
+    return streamPromise;
+  })
+    .asCallback(done);
 };
